@@ -1,0 +1,19 @@
+{
+  "users": [
+    {
+      "id": "4ee84cec-c455-4ff3-9637-d9395b6c1644",
+      "name": "Ney",
+      "role": "Desenvolvimento",
+      "email": "ney@kzyro.com",
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=240&auto=format&fit=crop&q=80",
+      "bio": "Membro da equipe KZYRO.",
+      "accentColor": "#38bdf8",
+      "joinedDate": "out. de 2026",
+      "supabaseUserId": "4ee84cec-c455-4ff3-9637-d9395b6c1644",
+      "passwordHash": "kzyropassword2026"
+    }
+  ],
+  "posts": [],
+  "messages": [],
+  "notifications": []
+}

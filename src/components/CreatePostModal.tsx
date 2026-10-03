@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { User } from '../types';
-import { StorageService } from '../services/storage';
+import { ApiService } from '../services/api';
 import { X, Image as ImageIcon, Sparkles, Upload, Check } from 'lucide-react';
 
 interface CreatePostModalProps {
@@ -51,12 +51,12 @@ export function CreatePostModal({
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!content.trim()) return;
+    if (!content.trim() || isSubmitting) return;
 
     setIsSubmitting(true);
-    StorageService.createPost(content, imageUrl);
+    await ApiService.createPost(currentUser.id, content, imageUrl);
     setContent('');
     setImageUrl('');
     setShowImageOptions(false);
@@ -100,7 +100,7 @@ export function CreatePostModal({
                   ({currentUser.role})
                 </span>
               </div>
-              <div className="text-[11px] text-slate-500">Publicando na KZYRO Community</div>
+              <div className="text-[11px] text-blue-400">Publicando no Feed Único da KZYRO</div>
             </div>
           </div>
           <button
@@ -120,7 +120,7 @@ export function CreatePostModal({
               autoFocus
               value={content}
               onChange={(e) => setContent(e.target.value)}
-              placeholder="O que está acontecendo na KZYRO hoje? Compartilhe um avanço, validação ou ideia com Ney, Saulo e Aminadab..."
+              placeholder="O que está acontecendo na KZYRO hoje? Compartilhe um avanço, validação ou ideia com toda a equipe..."
               rows={4}
               className="w-full bg-transparent text-slate-100 placeholder-slate-500 text-sm focus:outline-none resize-none leading-relaxed"
             />
@@ -129,7 +129,7 @@ export function CreatePostModal({
             <div>
               <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400 mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-blue-400" />
-                <span>Ideias rápidas de publicação:</span>
+                <span>Sugestões rápidas de publicação:</span>
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {INSPIRATION_SUGGESTIONS.map((suggestion, idx) => (

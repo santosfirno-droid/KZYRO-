@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { BrandLogo } from './BrandLogo';
 import { User } from '../types';
 import { StorageService } from '../services/storage';
-import { loginInSupabase, registerInSupabase } from '../services/supabase';
+import { ApiService } from '../services/api';
 import {
   Lock,
   Mail,
@@ -48,16 +48,8 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
     setIsLoading(true);
 
     try {
-      const res = await loginInSupabase(email, password);
+      const res = await ApiService.login(email, password);
       if (res.error || !res.user) {
-        // Fallback to local check if already registered
-        const local = StorageService.getMemberByEmail(email);
-        if (local) {
-          StorageService.setCurrentUser(local.id);
-          setIsLoading(false);
-          onLoginSuccess(local);
-          return;
-        }
         setError(res.error || 'Credenciais inválidas. Verifique os dados ou crie sua conta.');
         setIsLoading(false);
         return;
@@ -81,7 +73,7 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
       return;
     }
     if (!role.trim()) {
-      setError('Por favor, informe sua função na KZYRO (ex: Desenvolvimento, Prospecção, etc).');
+      setError('Por favor, informe sua função na KZYRO (ex: Desenvolvimento, Prospecção, Conversão...).');
       return;
     }
     if (password.length < 6) {
@@ -92,16 +84,16 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
     setIsLoading(true);
 
     try {
-      const res = await registerInSupabase({
-        email,
-        password,
+      const res = await ApiService.register({
         name,
         role,
-        avatarUrl: avatar,
+        email,
+        password,
+        avatar,
       });
 
       if (res.error || !res.user) {
-        setError(res.error || 'Falha no cadastro. Verifique os dados fornecidos.');
+        setError(res.error || 'Falha no cadastro. Verifique os dados.');
         setIsLoading(false);
         return;
       }
@@ -183,7 +175,7 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
             </h1>
             <div className="flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20">
               <Database className="w-3 h-3" />
-              <span>Supabase Auth</span>
+              <span>Nuvem KZYRO</span>
             </div>
           </div>
 
@@ -241,7 +233,7 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
                 className="w-full mt-2 py-3 px-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold text-sm rounded-xl transition-all shadow-lg shadow-blue-600/25 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 {isLoading ? (
-                  <span>Entrando no Supabase...</span>
+                  <span>Conectando...</span>
                 ) : (
                   <>
                     <span>Entrar na Comunidade</span>
@@ -391,7 +383,7 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
                 className="w-full mt-2 py-3 px-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold text-sm rounded-xl transition-all shadow-lg shadow-blue-600/25 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 {isLoading ? (
-                  <span>Criando conta no Supabase...</span>
+                  <span>Criando conta...</span>
                 ) : (
                   <>
                     <span>Criar Minha Conta</span>
@@ -430,7 +422,7 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
         </div>
 
         <div className="mt-6 text-center text-xs text-slate-500">
-          KZYRO Community &middot; Banco de Dados Supabase Oficial
+          KZYRO Community &middot; Nuvem e Supabase Sincronizados
         </div>
       </div>
     </div>

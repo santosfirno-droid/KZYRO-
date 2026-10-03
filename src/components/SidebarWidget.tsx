@@ -1,5 +1,6 @@
+import { useState, useEffect } from 'react';
 import { User } from '../types';
-import { StorageService } from '../services/storage';
+import { ApiService } from '../services/api';
 import { Shield, MessageCircle, Database } from 'lucide-react';
 
 interface SidebarWidgetProps {
@@ -13,7 +14,22 @@ export function SidebarWidget({
   onViewMemberProfile,
   onStartChatWithMember,
 }: SidebarWidgetProps) {
-  const members = StorageService.getMembers();
+  const [members, setMembers] = useState<User[]>([]);
+
+  useEffect(() => {
+    const loadUsers = async () => {
+      try {
+        const list = await ApiService.searchUsers();
+        setMembers(list);
+      } catch {
+        // noop
+      }
+    };
+    loadUsers();
+    const interval = setInterval(loadUsers, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
   const otherMembers = members.filter((m) => m.id !== currentUser.id);
 
   return (
@@ -80,12 +96,12 @@ export function SidebarWidget({
         <div className="flex items-center justify-between text-emerald-400 font-semibold text-xs">
           <div className="flex items-center gap-1.5">
             <Database className="w-3.5 h-3.5" />
-            <span>Supabase Conectado</span>
+            <span>Nuvem KZYRO Ativa</span>
           </div>
           <span className="w-2 h-2 rounded-full bg-emerald-400" />
         </div>
         <p className="text-[11px] leading-relaxed text-slate-400">
-          Autenticação e dados seguros para cada membro da KZYRO. Mensagens privadas e perfis isolados por conta.
+          Feed único compartilhado e mensagens privadas criptografadas com isolamento estrito de contas.
         </p>
       </div>
     </aside>

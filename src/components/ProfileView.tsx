@@ -1,6 +1,6 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { User, Post } from '../types';
-import { StorageService } from '../services/storage';
+import { ApiService } from '../services/api';
 import { PostCard } from './PostCard';
 import {
   ArrowLeft,
@@ -43,21 +43,47 @@ export function ProfileView({
   onOpenImage,
   onStartChatWithMember,
 }: ProfileViewProps) {
-  const member = StorageService.getMemberById(memberId) || currentUser;
-  const isMe = member.id === currentUser.id;
+  const [member, setMember] = useState<User>(() =>
+    memberId === currentUser.id ? currentUser : { ...currentUser, id: memberId }
+  );
+  const [memberPosts, setMemberPosts] = useState<Post[]>([]);
+  const isMe = memberId === currentUser.id;
 
   // Edit states
   const [isEditing, setIsEditing] = useState(false);
-  const [nameInput, setNameInput] = useState(member.name);
-  const [bioInput, setBioInput] = useState(member.bio);
-  const [avatarInput, setAvatarInput] = useState(member.avatar);
+  const [nameInput, setNameInput] = useState(currentUser.name);
+  const [roleInput, setRoleInput] = useState(currentUser.role);
+  const [bioInput, setBioInput] = useState(currentUser.bio);
+  const [avatarInput, setAvatarInput] = useState(currentUser.avatar);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const posts = StorageService.getPosts();
-  const memberPosts = posts.filter((p: Post) => p.authorId === member.id);
+  const loadProfile = async () => {
+    try {
+      const [u, allPosts] = await Promise.all([
+        ApiService.getUser(memberId),
+        ApiService.getPosts(),
+      ]);
+      if (u) {
+        setMember(u);
+        if (isMe) {
+          setNameInput(u.name);
+          setRoleInput(u.role);
+          setBioInput(u.bio);
+          setAvatarInput(u.avatar);
+        }
+      }
+      setMemberPosts(allPosts.filter((p) => p.authorId === memberId));
+    } catch {
+      // noop
+    }
+  };
+
+  useEffect(() => {
+    loadProfile();
+  }, [memberId]);
 
   const totalLikesReceived = memberPosts.reduce(
     (acc: number, p: Post) => acc + p.likes.length,
@@ -66,20 +92,24 @@ export function ProfileView({
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nameInput.trim()) return;
+    if (!nameInput.trim() || isSaving) return;
 
     setIsSaving(true);
-    StorageService.updateUserProfile(member.id, {
+    const updated = await ApiService.updateProfile(currentUser.id, {
       name: nameInput.trim(),
+      role: roleInput.trim(),
       avatar: avatarInput.trim(),
       bio: bioInput.trim(),
     });
 
+    if (updated) {
+      setMember(updated);
+      setIsEditing(false);
+      setSaveSuccessNotice(true);
+      setTimeout(() => setSaveSuccessNotice(false), 3500);
+      onPostUpdated();
+    }
     setIsSaving(false);
-    setIsEditing(false);
-    setSaveSuccessNotice(true);
-    setTimeout(() => setSaveSuccessNotice(false), 3500);
-    onPostUpdated();
   };
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -118,7 +148,7 @@ export function ProfileView({
 
           <div className="absolute bottom-2 right-3 text-[10px] text-slate-400 flex items-center gap-1 bg-[#0b1222]/80 px-2 py-0.5 rounded-md border border-slate-800">
             <Database className="w-3 h-3 text-emerald-400" />
-            <span>Sincronizado com Supabase</span>
+            <span>Sincronizado na Nuvem</span>
           </div>
         </div>
 
@@ -133,7 +163,6 @@ export function ProfileView({
                   className="w-24 h-24 rounded-2xl object-cover border-4 border-[#0b1222] shadow-xl bg-slate-800"
                 />
 
-                {/* Photo upload overlay button when editing */}
                 {isMe && isEditing && (
                   <button
                     type="button"
@@ -168,16 +197,11 @@ export function ProfileView({
                 !isEditing ? (
                   <button
                     type="button"
-                    onClick={() => {
-                      setNameInput(member.name);
-                      setBioInput(member.bio);
-                      setAvatarInput(member.avatar);
-                      setIsEditing(true);
-                    }}
+                    onClick={() => setIsEditing(true)}
                     className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors cursor-pointer border border-slate-700"
                   >
                     <UserIcon className="w-3.5 h-3.5 text-blue-400" />
-                    <span>Editar nome e foto</span>
+                    <span>Editar perfil e foto</span>
                   </button>
                 ) : null
               ) : (
@@ -197,7 +221,7 @@ export function ProfileView({
           {saveSuccessNotice && (
             <div className="mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs flex items-center gap-2">
               <Check className="w-4 h-4 shrink-0" />
-              <span>Perfil e foto atualizados com sucesso no Supabase!</span>
+              <span>Perfil e foto atualizados com sucesso no servidor e Supabase!</span>
             </div>
           )}
 
@@ -221,7 +245,21 @@ export function ProfileView({
                   value={nameInput}
                   onChange={(e) => setNameInput(e.target.value)}
                   className="w-full bg-[#0b1222] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
-                  placeholder="Seu nome completo ou de exibição"
+                  placeholder="Seu nome"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Função / Cargo
+                </label>
+                <input
+                  type="text"
+                  value={roleInput}
+                  onChange={(e) => setRoleInput(e.target.value)}
+                  className="w-full bg-[#0b1222] border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                  placeholder="ex: Desenvolvimento, Prospecção..."
                   required
                 />
               </div>
@@ -242,7 +280,6 @@ export function ProfileView({
                   <span className="text-[11px] text-slate-500">ou escolha abaixo:</span>
                 </div>
 
-                {/* Preset Avatars */}
                 <div className="flex items-center gap-2 mt-2">
                   {AVATAR_PRESETS.map((preset, idx) => (
                     <button
@@ -292,7 +329,7 @@ export function ProfileView({
           ) : (
             <div className="mt-3">
               <p className="text-xs text-slate-300 leading-relaxed max-w-2xl bg-slate-900/40 p-3 rounded-xl border border-slate-800/60">
-                {member.bio || 'Membro do time interno KZYRO.'}
+                {member.bio || 'Membro da equipe KZYRO.'}
               </p>
             </div>
           )}
@@ -345,7 +382,10 @@ export function ProfileView({
                 key={post.id}
                 post={post}
                 currentUser={currentUser}
-                onPostUpdated={onPostUpdated}
+                onPostUpdated={() => {
+                  loadProfile();
+                  onPostUpdated();
+                }}
                 onViewMemberProfile={onViewMemberProfile}
                 onOpenImage={onOpenImage}
               />

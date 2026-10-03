@@ -1,5 +1,6 @@
+import { useState, useEffect } from 'react';
 import { Notification, User } from '../types';
-import { StorageService } from '../services/storage';
+import { ApiService } from '../services/api';
 import { formatRelativeTime } from '../utils/date';
 import { Heart, MessageSquare, PlusCircle, CheckCheck, Bell, MessageCircle } from 'lucide-react';
 
@@ -16,19 +17,37 @@ export function NotificationsView({
   onNavigateToChat,
   onNotificationsUpdated,
 }: NotificationsViewProps) {
-  const notifications = StorageService.getNotifications(currentUser.id);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  const loadNotifications = async () => {
+    try {
+      const data = await ApiService.getNotifications(currentUser.id);
+      setNotifications(data);
+    } catch {
+      // noop
+    }
+  };
+
+  useEffect(() => {
+    loadNotifications();
+    const interval = setInterval(loadNotifications, 5000);
+    return () => clearInterval(interval);
+  }, [currentUser.id]);
+
   const unreadCount = notifications.filter((n) => !n.read).length;
 
-  const handleMarkAllRead = () => {
-    StorageService.markNotificationsAsRead(currentUser.id);
+  const handleMarkAllRead = async () => {
+    await ApiService.markNotificationsRead(currentUser.id);
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     onNotificationsUpdated();
   };
 
   const handleNotificationClick = (notif: Notification) => {
     if (!notif.read) {
-      const all = StorageService.getNotifications();
-      const updated = all.map((n) => (n.id === notif.id ? { ...n, read: true } : n));
-      localStorage.setItem('kzyro_community_notifications_v2', JSON.stringify(updated));
+      ApiService.markNotificationsRead(currentUser.id);
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === notif.id ? { ...n, read: true } : n))
+      );
       onNotificationsUpdated();
     }
 
@@ -61,7 +80,7 @@ export function NotificationsView({
       case 'comment':
         return 'comentou na sua publicação';
       case 'post':
-        return 'compartilhou uma nova atualização na comunidade';
+        return 'compartilhou uma nova publicação no feed';
       case 'direct_message':
         return 'enviou uma mensagem privada para você';
       default:

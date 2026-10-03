@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { User, TabType } from './types';
 import { StorageService } from './services/storage';
-import { fetchProfilesFromSupabase, supabase } from './services/supabase';
+import { ApiService } from './services/api';
 import { Navbar } from './components/Navbar';
 import { BottomNav } from './components/BottomNav';
 import { FeedView } from './components/FeedView';
@@ -26,78 +26,32 @@ export default function App() {
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
 
-  // Sync Supabase registered profiles to team directory
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+
+  // Poll for counts when user is logged in
   useEffect(() => {
-    fetchProfilesFromSupabase()
-      .then((remoteUsers) => {
-        if (remoteUsers.length > 0) {
-          const localMembers = StorageService.getMembers();
-          let changed = false;
+    if (!currentUser) return;
 
-          for (const ru of remoteUsers) {
-            const existing = localMembers.find(
-              (lm) => lm.email.toLowerCase() === ru.email.toLowerCase()
-            );
-            if (!existing) {
-              localMembers.push(ru);
-              changed = true;
-            } else {
-              if (ru.name && ru.name !== existing.name) {
-                existing.name = ru.name;
-                changed = true;
-              }
-              if (ru.avatar && ru.avatar !== existing.avatar) {
-                existing.avatar = ru.avatar;
-                changed = true;
-              }
-            }
-          }
-
-          if (changed) {
-            localStorage.setItem('kzyro_community_members_v3', JSON.stringify(localMembers));
-            setVersion((v) => v + 1);
-          }
-        }
-      })
-      .catch((err) => console.warn('Supabase profile sync note:', err));
-  }, []);
-
-  // Listen to Supabase auth state changes
-  useEffect(() => {
-    const { data: authSubscription } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user && !currentUser) {
-        const member = StorageService.getMemberByEmail(session.user.email || '');
-        if (member) {
-          setCurrentUser(member);
-        }
-      }
-    });
-
-    return () => {
-      authSubscription?.subscription?.unsubscribe();
-    };
-  }, [currentUser]);
-
-  // Subscribe to storage changes for cross-tab and event synchronization
-  useEffect(() => {
-    const handleStorageChange = () => {
-      setVersion((v) => v + 1);
-      if (currentUser) {
-        const freshUser = StorageService.getMemberById(currentUser.id);
-        if (freshUser) {
-          setCurrentUser(freshUser);
-        }
+    const fetchBadges = async () => {
+      try {
+        const [notifs, msgs] = await Promise.all([
+          ApiService.getNotifications(currentUser.id),
+          ApiService.getMessages(currentUser.id),
+        ]);
+        setUnreadNotificationsCount(notifs.filter((n) => !n.read).length);
+        setUnreadMessagesCount(
+          msgs.filter((m) => m.recipientId === currentUser.id && !m.read).length
+        );
+      } catch {
+        // noop
       }
     };
 
-    window.addEventListener('kzyro_storage_change', handleStorageChange);
-    window.addEventListener('storage', handleStorageChange);
-
-    return () => {
-      window.removeEventListener('kzyro_storage_change', handleStorageChange);
-      window.removeEventListener('storage', handleStorageChange);
-    };
-  }, [currentUser]);
+    fetchBadges();
+    const interval = setInterval(fetchBadges, 4000);
+    return () => clearInterval(interval);
+  }, [currentUser?.id, version]);
 
   const handlePostUpdated = () => {
     setVersion((v) => v + 1);
@@ -153,10 +107,6 @@ export default function App() {
   if (!currentUser) {
     return <LoginView onLoginSuccess={handleLoginSuccess} />;
   }
-
-  const notifications = StorageService.getNotifications(currentUser.id);
-  const unreadNotificationsCount = notifications.filter((n) => !n.read).length;
-  const unreadMessagesCount = StorageService.getUnreadDirectMessagesCount(currentUser.id);
 
   return (
     <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col font-sans pb-20 sm:pb-8 selection:bg-blue-600 selection:text-white">

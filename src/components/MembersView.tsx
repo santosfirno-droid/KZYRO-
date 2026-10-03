@@ -1,6 +1,7 @@
-import { User } from '../types';
-import { StorageService } from '../services/storage';
-import { ArrowRight, MessageSquare, Shield, CheckCircle2, MessageCircle, UserPlus } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { User, Post } from '../types';
+import { ApiService } from '../services/api';
+import { ArrowRight, MessageSquare, Shield, CheckCircle2, MessageCircle, Search, UserPlus } from 'lucide-react';
 
 interface MembersViewProps {
   onSelectMember: (userId: string) => void;
@@ -13,21 +14,48 @@ export function MembersView({
   onStartChatWithMember,
   currentUser,
 }: MembersViewProps) {
-  const members = StorageService.getMembers();
-  const posts = StorageService.getPosts();
+  const [members, setMembers] = useState<User[]>([]);
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const loadData = async () => {
+    try {
+      const [usersList, postsList] = await Promise.all([
+        ApiService.searchUsers(),
+        ApiService.getPosts(),
+      ]);
+      setMembers(usersList);
+      setPosts(postsList);
+    } catch {
+      // noop
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+    const interval = setInterval(loadData, 4000);
+    return () => clearInterval(interval);
+  }, []);
 
   const getPostCount = (userId: string): number => {
     return posts.filter((p) => p.authorId === userId).length;
   };
 
+  const filteredMembers = members.filter(
+    (m) =>
+      m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      m.role.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      m.email.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-800">
         <div>
-          <h1 className="text-xl font-bold text-white tracking-tight">Membros da KZYRO</h1>
+          <h1 className="text-xl font-bold text-white tracking-tight">Equipe KZYRO</h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Membros com contas registradas no Supabase ({members.length})
+            Diretório de membros cadastrados ({members.length})
           </p>
         </div>
         <div className="inline-flex items-center gap-1.5 text-xs text-blue-400 bg-blue-500/10 px-3 py-1.5 rounded-lg border border-blue-500/20 w-fit">
@@ -36,15 +64,45 @@ export function MembersView({
         </div>
       </div>
 
+      {/* User Search Bar */}
+      <div className="relative">
+        <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Pesquisar contas por nome, cargo ou e-mail..."
+          className="w-full bg-[#0b1222] border border-slate-800 focus:border-blue-500 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-100 placeholder-slate-500 outline-none transition-all shadow-sm"
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery('')}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-white"
+          >
+            Limpar
+          </button>
+        )}
+      </div>
+
       {/* Members Grid */}
-      {members.length === 0 ? (
-        <div className="text-center py-12 px-4 bg-[#0b1222] border border-slate-800 rounded-2xl text-slate-400">
+      {filteredMembers.length === 0 ? (
+        <div className="text-center py-14 px-4 bg-[#0b1222] border border-slate-800 rounded-2xl text-slate-400">
           <UserPlus className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-          <p className="text-sm font-semibold text-slate-200">Nenhum membro cadastrado ainda.</p>
+          <p className="text-sm font-semibold text-slate-200">
+            {searchQuery
+              ? `Nenhum membro encontrado para "${searchQuery}".`
+              : 'Nenhum membro cadastrado ainda.'}
+          </p>
+          <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+            {searchQuery
+              ? 'Tente buscar por outro termo ou nome.'
+              : 'Novos membros que criarem conta aparecerão automaticamente neste diretório.'}
+          </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {members.map((member) => {
+          {filteredMembers.map((member) => {
             const postCount = getPostCount(member.id);
             const isCurrent = member.id === currentUser.id;
 
@@ -141,17 +199,6 @@ export function MembersView({
           })}
         </div>
       )}
-
-      {/* Info card */}
-      <div className="p-4 rounded-xl bg-slate-900/50 border border-slate-800/60 text-xs text-slate-400 flex items-start gap-3">
-        <div className="p-2 rounded-lg bg-blue-600/10 text-blue-400 shrink-0 mt-0.5">
-          <Shield className="w-4 h-4" />
-        </div>
-        <div>
-          <strong className="text-slate-200 block mb-0.5">Contas Individuais</strong>
-          Cada pessoa da equipe deve criar sua própria conta na tela inicial. Assim que criarem suas contas, elas aparecerão listadas aqui para que possam interagir no feed e trocar mensagens privadas.
-        </div>
-      </div>
     </div>
   );
 }

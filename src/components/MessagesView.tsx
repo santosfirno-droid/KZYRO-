@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, DirectMessage } from '../types';
-import { StorageService } from '../services/storage';
+import { ApiService } from '../services/api';
 import { formatRelativeTime } from '../utils/date';
 import {
   Send,
@@ -8,9 +8,10 @@ import {
   Image as ImageIcon,
   Trash2,
   X,
-  Upload,
   ArrowLeft,
   CheckCheck,
+  Search,
+  UserPlus,
 } from 'lucide-react';
 import { ConfirmModal } from './ConfirmModal';
 
@@ -27,60 +28,96 @@ export function MessagesView({
   onViewMemberProfile,
   onOpenImage,
 }: MessagesViewProps) {
-  const allMembers = StorageService.getMembers();
-  // Filter out currentUser from contacts list
-  const availablePartners = allMembers.filter((m) => m.id !== currentUser.id);
-
-  const [selectedPartnerId, setSelectedPartnerId] = useState<string>(() => {
-    if (initialPartnerId && availablePartners.some((p) => p.id === initialPartnerId)) {
-      return initialPartnerId;
-    }
-    return availablePartners[0]?.id || '';
-  });
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [messages, setMessages] = useState<DirectMessage[]>([]);
+  const [selectedPartnerId, setSelectedPartnerId] = useState<string>(initialPartnerId || '');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showNewChatModal, setShowNewChatModal] = useState(false);
+  const [modalSearch, setModalSearch] = useState('');
 
   const [messageText, setMessageText] = useState('');
   const [imageUrl, setImageUrl] = useState('');
-  const [showImagePicker, setShowImagePicker] = useState(false);
   const [messageToDeleteId, setMessageToDeleteId] = useState<string | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [isSending, setIsSending] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const selectedPartner = allMembers.find((m) => m.id === selectedPartnerId);
+  // Load all users and messages from server
+  const loadData = async () => {
+    try {
+      const [usersList, msgsList] = await Promise.all([
+        ApiService.searchUsers(),
+        ApiService.getMessages(currentUser.id),
+      ]);
+      setAllUsers(usersList.filter((u) => u.id !== currentUser.id));
+      setMessages(msgsList);
 
-  // STRICT ACCOUNT ISOLATION: get conversation strictly between currentUser and selectedPartner
-  const conversation: DirectMessage[] = selectedPartnerId
-    ? StorageService.getConversation(currentUser.id, selectedPartnerId)
-    : [];
+      // Default select first partner if none selected
+      if (!selectedPartnerId && usersList.length > 1) {
+        const first = usersList.find((u) => u.id !== currentUser.id);
+        if (first) setSelectedPartnerId(first.id);
+      }
+    } catch (err) {
+      console.warn('Error loading chat data:', err);
+    }
+  };
 
-  // Mark conversation as read on open or change
+  useEffect(() => {
+    loadData();
+    const interval = setInterval(loadData, 4000); // Polling for real-time incoming messages
+    return () => clearInterval(interval);
+  }, [currentUser.id]);
+
+  useEffect(() => {
+    if (initialPartnerId) {
+      setSelectedPartnerId(initialPartnerId);
+    }
+  }, [initialPartnerId]);
+
+  // Mark read when partner is selected
   useEffect(() => {
     if (selectedPartnerId) {
-      StorageService.markConversationAsRead(currentUser.id, selectedPartnerId);
+      ApiService.markMessagesRead(currentUser.id, selectedPartnerId);
     }
-  }, [selectedPartnerId, refreshKey, currentUser.id]);
+  }, [selectedPartnerId, messages.length]);
 
-  // Scroll to bottom of chat
+  // Scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [conversation.length, selectedPartnerId]);
+  }, [messages.length, selectedPartnerId]);
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const selectedPartner = allUsers.find((u) => u.id === selectedPartnerId);
+
+  // STRICT ACCOUNT ISOLATION: filter strictly between currentUser and selectedPartner
+  const conversation = selectedPartnerId
+    ? messages
+        .filter(
+          (m) =>
+            (m.senderId === currentUser.id && m.recipientId === selectedPartnerId) ||
+            (m.senderId === selectedPartnerId && m.recipientId === currentUser.id)
+        )
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+    : [];
+
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!messageText.trim() && !imageUrl) return;
+    if ((!messageText.trim() && !imageUrl) || isSending || !selectedPartnerId) return;
 
-    StorageService.sendDirectMessage({
+    setIsSending(true);
+    const sent = await ApiService.sendMessage({
       senderId: currentUser.id,
       recipientId: selectedPartnerId,
       content: messageText,
       imageUrl: imageUrl || undefined,
     });
 
-    setMessageText('');
-    setImageUrl('');
-    setShowImagePicker(false);
-    setRefreshKey((k) => k + 1);
+    if (sent) {
+      setMessages((prev) => [...prev, sent]);
+      setMessageText('');
+      setImageUrl('');
+    }
+    setIsSending(false);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -91,31 +128,49 @@ export function MessagesView({
     reader.onload = (uploadEvent) => {
       if (uploadEvent.target?.result) {
         setImageUrl(uploadEvent.target.result as string);
-        setShowImagePicker(false);
       }
     };
     reader.readAsDataURL(file);
   };
 
-  const confirmDeleteMessage = () => {
-    if (messageToDeleteId) {
-      StorageService.deleteDirectMessage(messageToDeleteId, currentUser.id);
-      setMessageToDeleteId(null);
-      setRefreshKey((k) => k + 1);
+  const confirmDeleteMessage = async () => {
+    if (!messageToDeleteId) return;
+    const ok = await ApiService.deleteMessage(messageToDeleteId, currentUser.id);
+    if (ok) {
+      setMessages((prev) => prev.filter((m) => m.id !== messageToDeleteId));
     }
+    setMessageToDeleteId(null);
   };
 
-  // Helper to count unread messages from a partner
+  // Filter contacts by search query
+  const filteredPartners = allUsers.filter(
+    (u) =>
+      u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      u.role.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      u.email.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  // Modal search
+  const modalUsers = allUsers.filter(
+    (u) =>
+      u.name.toLowerCase().includes(modalSearch.toLowerCase()) ||
+      u.role.toLowerCase().includes(modalSearch.toLowerCase()) ||
+      u.email.toLowerCase().includes(modalSearch.toLowerCase())
+  );
+
   const getUnreadFrom = (partnerId: string): number => {
-    const all = StorageService.getDirectMessagesForUser(currentUser.id);
-    return all.filter((m) => m.senderId === partnerId && m.recipientId === currentUser.id && !m.read)
-      .length;
+    return messages.filter(
+      (m) => m.senderId === partnerId && m.recipientId === currentUser.id && !m.read
+    ).length;
   };
 
-  // Helper to get last message with a partner
   const getLastMessageWith = (partnerId: string): DirectMessage | undefined => {
-    const conv = StorageService.getConversation(currentUser.id, partnerId);
-    return conv[conv.length - 1];
+    const userMsgs = messages.filter(
+      (m) =>
+        (m.senderId === currentUser.id && m.recipientId === partnerId) ||
+        (m.senderId === partnerId && m.recipientId === currentUser.id)
+    );
+    return userMsgs[userMsgs.length - 1];
   };
 
   return (
@@ -132,81 +187,117 @@ export function MessagesView({
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Contacts Sidebar (Available Team Members) */}
+        {/* Contacts Sidebar */}
         <aside
-          className={`w-full sm:w-72 bg-[#080e1c] border-r border-slate-800/80 flex flex-col ${
+          className={`w-full sm:w-80 bg-[#080e1c] border-r border-slate-800/80 flex flex-col ${
             selectedPartnerId ? 'hidden sm:flex' : 'flex'
           }`}
         >
-          <div className="p-3.5 border-b border-slate-800/60">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              Conversas Diretas
-            </h2>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              Privadas apenas entre você e cada membro
-            </p>
+          {/* Header & Search */}
+          <div className="p-3 border-b border-slate-800/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                Conversas
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowNewChatModal(true)}
+                className="py-1 px-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+              >
+                <UserPlus className="w-3 h-3" />
+                <span>Nova conversa</span>
+              </button>
+            </div>
+
+            {/* Instant Search Bar */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Pesquisar membro ou cargo..."
+                className="w-full bg-[#070b14] border border-slate-800 focus:border-blue-500 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 outline-none"
+              />
+            </div>
           </div>
 
+          {/* List of Contacts */}
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
-            {availablePartners.map((partner) => {
-              const unread = getUnreadFrom(partner.id);
-              const lastMsg = getLastMessageWith(partner.id);
-              const isSelected = selectedPartnerId === partner.id;
-
-              return (
-                <button
-                  key={partner.id}
-                  type="button"
-                  onClick={() => setSelectedPartnerId(partner.id)}
-                  className={`w-full flex items-center gap-3 p-2.5 rounded-xl transition-all text-left cursor-pointer ${
-                    isSelected
-                      ? 'bg-blue-600/20 border border-blue-500/40 text-white'
-                      : 'hover:bg-slate-900 border border-transparent text-slate-300'
-                  }`}
-                >
-                  <div className="relative shrink-0">
-                    <img
-                      src={partner.avatar}
-                      alt={partner.name}
-                      className="w-10 h-10 rounded-full object-cover border border-slate-700"
-                    />
-                    <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-[#080e1c]" />
+            {filteredPartners.length === 0 ? (
+              <div className="text-center py-10 px-4 text-slate-500 text-xs">
+                {searchQuery ? (
+                  <p>Nenhum membro encontrado com &ldquo;{searchQuery}&rdquo;</p>
+                ) : (
+                  <div className="space-y-2">
+                    <p>Nenhuma outra conta cadastrada ainda.</p>
+                    <p className="text-[11px] text-slate-600">
+                      Peça para seus colegas criarem uma conta na tela de login.
+                    </p>
                   </div>
+                )}
+              </div>
+            ) : (
+              filteredPartners.map((partner) => {
+                const unread = getUnreadFrom(partner.id);
+                const lastMsg = getLastMessageWith(partner.id);
+                const isSelected = selectedPartnerId === partner.id;
 
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold truncate text-slate-200">
-                        {partner.name}
-                      </span>
-                      {lastMsg && (
-                        <span className="text-[10px] text-slate-500">
-                          {formatRelativeTime(lastMsg.createdAt)}
+                return (
+                  <button
+                    key={partner.id}
+                    type="button"
+                    onClick={() => setSelectedPartnerId(partner.id)}
+                    className={`w-full flex items-center gap-3 p-2.5 rounded-xl transition-all text-left cursor-pointer ${
+                      isSelected
+                        ? 'bg-blue-600/20 border border-blue-500/40 text-white'
+                        : 'hover:bg-slate-900 border border-transparent text-slate-300'
+                    }`}
+                  >
+                    <div className="relative shrink-0">
+                      <img
+                        src={partner.avatar}
+                        alt={partner.name}
+                        className="w-10 h-10 rounded-full object-cover border border-slate-700"
+                      />
+                      <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-[#080e1c]" />
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold truncate text-slate-200">
+                          {partner.name}
                         </span>
+                        {lastMsg && (
+                          <span className="text-[10px] text-slate-500">
+                            {formatRelativeTime(lastMsg.createdAt)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-400 truncate">
+                        {partner.role}
+                      </div>
+                      {lastMsg ? (
+                        <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                          {lastMsg.senderId === currentUser.id ? 'Você: ' : ''}
+                          {lastMsg.content || '📷 Imagem anexada'}
+                        </p>
+                      ) : (
+                        <p className="text-[10px] text-slate-500 italic mt-0.5">
+                          Iniciar conversa privada...
+                        </p>
                       )}
                     </div>
-                    <div className="text-[11px] text-slate-400 truncate">
-                      {partner.role}
-                    </div>
-                    {lastMsg ? (
-                      <p className="text-[11px] text-slate-400 truncate mt-0.5">
-                        {lastMsg.senderId === currentUser.id ? 'Você: ' : ''}
-                        {lastMsg.content || '📷 Imagem anexada'}
-                      </p>
-                    ) : (
-                      <p className="text-[10px] text-slate-500 italic mt-0.5">
-                        Iniciar conversa...
-                      </p>
-                    )}
-                  </div>
 
-                  {unread > 0 && (
-                    <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
-                      {unread}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+                    {unread > 0 && (
+                      <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
+                        {unread}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            )}
           </div>
         </aside>
 
@@ -248,7 +339,7 @@ export function MessagesView({
                       </div>
                       <div className="text-[10px] text-emerald-400 flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                        Disponível na KZYRO
+                        Online na KZYRO
                       </div>
                     </div>
                   </div>
@@ -261,16 +352,16 @@ export function MessagesView({
                 </div>
               </div>
 
-              {/* Message List */}
+              {/* Message History */}
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {conversation.length === 0 ? (
                   <div className="text-center py-16 px-4 text-slate-400">
                     <Lock className="w-8 h-8 text-blue-400/60 mx-auto mb-2" />
                     <p className="text-xs font-semibold text-slate-200">
-                      Nenhuma mensagem trocada ainda com {selectedPartner.name}.
+                      Inicie uma conversa privada com {selectedPartner.name}.
                     </p>
                     <p className="text-[11px] text-slate-500 mt-1 max-w-xs mx-auto">
-                      Envie uma mensagem privada para alinhar ideias, fechar negócios ou tirar dúvidas técnicas.
+                      Esta conversa é segura e visível apenas para vocês dois.
                     </p>
                   </div>
                 ) : (
@@ -299,7 +390,6 @@ export function MessagesView({
                               : 'bg-[#0f172a] border border-slate-800 text-slate-200 rounded-bl-none'
                           }`}
                         >
-                          {/* Image Attachment in message */}
                           {msg.imageUrl && (
                             <div className="mb-2 rounded-xl overflow-hidden border border-white/10 max-h-56 bg-black/30">
                               <img
@@ -323,7 +413,7 @@ export function MessagesView({
                           </div>
                         </div>
 
-                        {/* Delete sent message button */}
+                        {/* Delete sent message */}
                         {isMe && (
                           <button
                             type="button"
@@ -341,7 +431,7 @@ export function MessagesView({
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Image Preview before sending */}
+              {/* Image Preview */}
               {imageUrl && (
                 <div className="px-4 py-2 bg-[#0b1222] border-t border-slate-800 flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -398,7 +488,7 @@ export function MessagesView({
 
                 <button
                   type="submit"
-                  disabled={!messageText.trim() && !imageUrl}
+                  disabled={(!messageText.trim() && !imageUrl) || isSending}
                   className="p-2.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl shadow-md transition-all cursor-pointer"
                   aria-label="Enviar mensagem"
                 >
@@ -410,15 +500,100 @@ export function MessagesView({
             <div className="flex-1 flex flex-col items-center justify-center p-6 text-slate-400 text-center">
               <Lock className="w-10 h-10 text-slate-600 mb-2" />
               <p className="text-sm font-semibold text-slate-300">
-                Selecione um membro para iniciar o chat privado
+                Selecione ou pesquise um membro para conversar
               </p>
-              <p className="text-xs text-slate-500 mt-1 max-w-sm">
-                Toda conversa é criptografada no cliente e visível estritamente para os dois participantes.
+              <p className="text-xs text-slate-500 mt-1 max-w-sm mb-4">
+                Toda conversa é visível estritamente para você e o outro participante.
               </p>
+              <button
+                type="button"
+                onClick={() => setShowNewChatModal(true)}
+                className="py-2 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md cursor-pointer"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Pesquisar membro</span>
+              </button>
             </div>
           )}
         </section>
       </div>
+
+      {/* New Chat / User Search Modal */}
+      {showNewChatModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          onClick={() => setShowNewChatModal(false)}
+        >
+          <div
+            className="w-full max-w-md bg-[#0b1222] border border-slate-800 rounded-2xl p-5 shadow-2xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Search className="w-4 h-4 text-blue-400" />
+                <span>Pesquisar Membro para Conversar</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowNewChatModal(false)}
+                className="p-1 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                autoFocus
+                type="text"
+                value={modalSearch}
+                onChange={(e) => setModalSearch(e.target.value)}
+                placeholder="Digite o nome, cargo ou e-mail..."
+                className="w-full bg-[#070b14] border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-blue-500"
+              />
+            </div>
+
+            <div className="max-h-60 overflow-y-auto space-y-1.5">
+              {modalUsers.length === 0 ? (
+                <div className="text-center py-6 text-xs text-slate-500">
+                  Nenhum membro encontrado.
+                </div>
+              ) : (
+                modalUsers.map((user) => (
+                  <button
+                    key={user.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedPartnerId(user.id);
+                      setShowNewChatModal(false);
+                      setModalSearch('');
+                    }}
+                    className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-800/80 border border-slate-800 text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <img
+                        src={user.avatar}
+                        alt={user.name}
+                        className="w-9 h-9 rounded-full object-cover border border-slate-700"
+                      />
+                      <div>
+                        <div className="text-xs font-bold text-slate-200 group-hover:text-white">
+                          {user.name}
+                        </div>
+                        <div className="text-[11px] text-blue-400">{user.role}</div>
+                      </div>
+                    </div>
+                    <span className="text-xs text-blue-400 font-medium group-hover:translate-x-0.5 transition-transform">
+                      Abrir chat &rarr;
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete message modal */}
       <ConfirmModal

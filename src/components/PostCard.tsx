@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Post, User } from '../types';
-import { StorageService } from '../services/storage';
+import { ApiService } from '../services/api';
 import { formatRelativeTime } from '../utils/date';
 import { Heart, MessageSquare, Send, Trash2, MoreHorizontal } from 'lucide-react';
 import { ConfirmModal } from './ConfirmModal';
@@ -32,50 +32,35 @@ export function PostCard({
   const isLikedByMe = post.likes.includes(currentUser.id);
   const isMyPost = post.authorId === currentUser.id;
 
-  const handleToggleLike = () => {
-    StorageService.toggleLike(post.id);
+  const handleToggleLike = async () => {
+    await ApiService.toggleLike(post.id, currentUser.id);
     onPostUpdated();
   };
 
-  const handleAddComment = (e: React.FormEvent) => {
+  const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!commentText.trim()) return;
+    if (!commentText.trim() || isSubmittingComment) return;
 
     setIsSubmittingComment(true);
-    StorageService.addComment(post.id, commentText);
+    await ApiService.addComment(post.id, currentUser.id, commentText);
     setCommentText('');
     setIsSubmittingComment(false);
     setShowComments(true);
     onPostUpdated();
   };
 
-  const confirmDeletePost = () => {
-    StorageService.deletePost(post.id);
+  const confirmDeletePost = async () => {
+    await ApiService.deletePost(post.id, currentUser.id);
     setIsDeletePostModalOpen(false);
     onPostUpdated();
   };
 
-  const confirmDeleteComment = () => {
+  const confirmDeleteComment = async () => {
     if (commentToDeleteId) {
-      StorageService.deleteComment(post.id, commentToDeleteId);
+      await ApiService.deleteComment(post.id, commentToDeleteId, currentUser.id);
       setCommentToDeleteId(null);
       onPostUpdated();
     }
-  };
-
-  // Get readable list of who liked
-  const allMembers = StorageService.getMembers();
-  const likerNames = post.likes.map((id) => {
-    if (id === currentUser.id) return 'Você';
-    const member = allMembers.find((m) => m.id === id);
-    return member ? member.name : 'Membro';
-  });
-
-  const getLikerSummary = () => {
-    if (likerNames.length === 0) return null;
-    if (likerNames.length === 1) return `Curtido por ${likerNames[0]}`;
-    if (likerNames.length === 2) return `Curtido por ${likerNames[0]} e ${likerNames[1]}`;
-    return `Curtido por ${likerNames[0]}, ${likerNames[1]} e mais ${likerNames.length - 2}`;
   };
 
   return (
@@ -125,7 +110,7 @@ export function PostCard({
                 {formatRelativeTime(post.createdAt)}
               </time>
             </div>
-            <div className="text-[11px] text-slate-500">KZYRO Team</div>
+            <div className="text-[11px] text-slate-500">Membro KZYRO</div>
           </div>
         </div>
 
@@ -184,10 +169,16 @@ export function PostCard({
       )}
 
       {/* Who Liked Summary Line */}
-      {likerNames.length > 0 && (
+      {post.likes.length > 0 && (
         <div className="px-4 sm:px-5 pt-3 text-[11px] text-slate-400 flex items-center gap-1.5">
           <Heart className="w-3.5 h-3.5 text-rose-500 fill-rose-500" />
-          <span>{getLikerSummary()}</span>
+          <span>
+            {post.likes.length === 1
+              ? isLikedByMe
+                ? 'Você curtiu esta publicação'
+                : '1 pessoa curtiu'
+              : `${post.likes.length} pessoas curtiram`}
+          </span>
         </div>
       )}
 
@@ -228,7 +219,7 @@ export function PostCard({
         </div>
 
         <span className="text-[11px] text-slate-500 hidden sm:inline">
-          KZYRO Privado
+          KZYRO Feed Único
         </span>
       </div>
 
