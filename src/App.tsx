@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { User, TabType } from './types';
 import { StorageService } from './services/storage';
 import { ApiService } from './services/api';
+import { realtimeService } from './services/realtime';
 import { Navbar } from './components/Navbar';
 import { BottomNav } from './components/BottomNav';
 import { FeedView } from './components/FeedView';
@@ -29,6 +30,90 @@ export default function App() {
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
 
+  // Initialize Realtime Supabase presence and live event sync
+  useEffect(() => {
+    if (!currentUser) return;
+
+    realtimeService.init(currentUser);
+
+    const unsubscribe = realtimeService.subscribeEvents({
+      onNewPost: (newPost) => {
+        const posts = StorageService.getPosts();
+        if (!posts.some((p) => p.id === newPost.id)) {
+          localStorage.setItem(
+            'kzyro_community_posts_v3',
+            JSON.stringify([newPost, ...posts])
+          );
+          setVersion((v) => v + 1);
+        }
+      },
+      onDeletePost: (postId) => {
+        StorageService.deletePost(postId);
+        setVersion((v) => v + 1);
+      },
+      onPostLike: ({ postId, likes }) => {
+        const posts = StorageService.getPosts();
+        const updated = posts.map((p) => (p.id === postId ? { ...p, likes } : p));
+        localStorage.setItem('kzyro_community_posts_v3', JSON.stringify(updated));
+        setVersion((v) => v + 1);
+      },
+      onNewComment: ({ postId, comment }) => {
+        const posts = StorageService.getPosts();
+        const updated = posts.map((p) => {
+          if (p.id === postId && !p.comments.some((c) => c.id === comment.id)) {
+            return { ...p, comments: [...p.comments, comment] };
+          }
+          return p;
+        });
+        localStorage.setItem('kzyro_community_posts_v3', JSON.stringify(updated));
+        setVersion((v) => v + 1);
+      },
+      onDirectMessage: (msg) => {
+        const all = StorageService.getAllDirectMessages();
+        if (!all.some((m) => m.id === msg.id)) {
+          localStorage.setItem(
+            'kzyro_community_direct_messages_v3',
+            JSON.stringify([...all, msg])
+          );
+          setVersion((v) => v + 1);
+        }
+      },
+      onPresenceUpdate: (_onlineSet, profiles) => {
+        const members = StorageService.getMembers();
+        let changed = false;
+
+        // Auto-discover any new members joining via Supabase
+        for (const [userId, profile] of Object.entries(profiles)) {
+          const existing = members.find((m) => m.id === userId);
+          if (!existing && profile.name) {
+            members.push({
+              id: userId,
+              name: profile.name,
+              role: profile.role || 'Equipe KZYRO',
+              email: profile.email || `${userId}@kzyro.com`,
+              avatar: profile.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=240&auto=format&fit=crop&q=80',
+              bio: 'Membro da equipe KZYRO.',
+              accentColor: '#38bdf8',
+              joinedDate: 'Hoje',
+              isOnline: true,
+            });
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          localStorage.setItem('kzyro_community_members_v3', JSON.stringify(members));
+          setVersion((v) => v + 1);
+        }
+      },
+    });
+
+    return () => {
+      unsubscribe();
+      realtimeService.destroy();
+    };
+  }, [currentUser?.id]);
+
   // Poll for counts when user is logged in
   useEffect(() => {
     if (!currentUser) return;
@@ -49,19 +134,33 @@ export default function App() {
     };
 
     fetchBadges();
-    const interval = setInterval(fetchBadges, 4000);
-
-    // Keep active user online status updated
-    ApiService.sendHeartbeat(currentUser.id);
-    const hbInterval = setInterval(() => {
-      ApiService.sendHeartbeat(currentUser.id);
-    }, 20000);
+    const interval = setInterval(fetchBadges, 3000);
 
     return () => {
       clearInterval(interval);
-      clearInterval(hbInterval);
     };
   }, [currentUser?.id, version]);
+
+  // Subscribe to storage changes for cross-tab synchronization
+  useEffect(() => {
+    const handleStorageChange = () => {
+      setVersion((v) => v + 1);
+      if (currentUser) {
+        const freshUser = StorageService.getMemberById(currentUser.id);
+        if (freshUser) {
+          setCurrentUser(freshUser);
+        }
+      }
+    };
+
+    window.addEventListener('kzyro_storage_change', handleStorageChange);
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      window.removeEventListener('kzyro_storage_change', handleStorageChange);
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, [currentUser]);
 
   const handlePostUpdated = () => {
     setVersion((v) => v + 1);
@@ -76,6 +175,7 @@ export default function App() {
 
   const handleLogout = () => {
     StorageService.logout();
+    realtimeService.destroy();
     setCurrentUser(null);
     setActiveTab('feed');
     setSelectedProfileMemberId(null);
@@ -113,7 +213,7 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // If user is not logged in, render the clean login / registration screen
+  // If user is not logged in, render the login / registration screen
   if (!currentUser) {
     return <LoginView onLoginSuccess={handleLoginSuccess} />;
   }
