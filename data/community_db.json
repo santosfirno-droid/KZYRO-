@@ -11,9 +11,34 @@
       "joinedDate": "out. de 2026",
       "supabaseUserId": "4ee84cec-c455-4ff3-9637-d9395b6c1644",
       "passwordHash": "kzyropassword2026"
+    },
+    {
+      "id": "test_user_1",
+      "name": "Carlos Dev",
+      "role": "Desenvolvimento",
+      "email": "carlos@kzyro.com",
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=240&auto=format&fit=crop&q=80",
+      "bio": "Membro da equipe KZYRO.",
+      "accentColor": "#38bdf8",
+      "joinedDate": "Hoje",
+      "lastActiveAt": 1790992815444
     }
   ],
   "posts": [],
   "messages": [],
-  "notifications": []
+  "notifications": [
+    {
+      "id": "notif_1790992815444_4ee84cec-c455-4ff3-9637-d9395b6c1644",
+      "recipientId": "4ee84cec-c455-4ff3-9637-d9395b6c1644",
+      "senderId": "test_user_1",
+      "senderName": "Carlos Dev",
+      "senderAvatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=240&auto=format&fit=crop&q=80",
+      "senderRole": "Desenvolvimento",
+      "type": "post",
+      "postId": "post_1790992815444_p1g0z",
+      "snippet": "Testando publicação visível para toda a equipe KZY...",
+      "createdAt": "2026-10-03T02:00:15.444Z",
+      "read": false
+    }
+  ]
 }

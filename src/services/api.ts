@@ -1,6 +1,19 @@
 import { User, Post, Comment, DirectMessage, Notification } from '../types';
 
 export const ApiService = {
+  // Presence Heartbeat
+  async sendHeartbeat(userId: string): Promise<void> {
+    try {
+      await fetch('/api/users/heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+    } catch {
+      // noop
+    }
+  },
+
   // Users & Search
   async searchUsers(query: string = ''): Promise<User[]> {
     try {
@@ -71,7 +84,7 @@ export const ApiService = {
 
   async updateProfile(
     userId: string,
-    updates: { name?: string; role?: string; avatar?: string; bio?: string }
+    updates: { name?: string; role?: string; avatar?: string; bio?: string; email?: string }
   ): Promise<User | null> {
     try {
       const res = await fetch(`/api/users/${userId}`, {
@@ -98,21 +111,29 @@ export const ApiService = {
     }
   },
 
-  async createPost(
-    authorId: string,
-    content: string,
-    imageUrl?: string
-  ): Promise<Post | null> {
+  async createPost(params: {
+    authorId: string;
+    authorName: string;
+    authorRole: string;
+    authorAvatar: string;
+    authorEmail?: string;
+    content: string;
+    imageUrl?: string;
+  }): Promise<Post | null> {
     try {
       const res = await fetch('/api/posts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ authorId, content, imageUrl }),
+        body: JSON.stringify(params),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Erro ao publicar no servidor.');
+      }
       return await res.json();
-    } catch {
-      return null;
+    } catch (err) {
+      console.error('API createPost error:', err);
+      throw err;
     }
   },
 
@@ -142,16 +163,19 @@ export const ApiService = {
     }
   },
 
-  async addComment(
-    postId: string,
-    authorId: string,
-    content: string
-  ): Promise<Comment | null> {
+  async addComment(params: {
+    postId: string;
+    authorId: string;
+    authorName?: string;
+    authorRole?: string;
+    authorAvatar?: string;
+    content: string;
+  }): Promise<Comment | null> {
     try {
-      const res = await fetch(`/api/posts/${postId}/comments`, {
+      const res = await fetch(`/api/posts/${params.postId}/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ authorId, content }),
+        body: JSON.stringify(params),
       });
       if (!res.ok) return null;
       return await res.json();
@@ -189,6 +213,10 @@ export const ApiService = {
   async sendMessage(params: {
     senderId: string;
     recipientId: string;
+    senderName?: string;
+    senderAvatar?: string;
+    recipientName?: string;
+    recipientAvatar?: string;
     content: string;
     imageUrl?: string;
   }): Promise<DirectMessage | null> {

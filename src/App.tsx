@@ -50,7 +50,17 @@ export default function App() {
 
     fetchBadges();
     const interval = setInterval(fetchBadges, 4000);
-    return () => clearInterval(interval);
+
+    // Keep active user online status updated
+    ApiService.sendHeartbeat(currentUser.id);
+    const hbInterval = setInterval(() => {
+      ApiService.sendHeartbeat(currentUser.id);
+    }, 20000);
+
+    return () => {
+      clearInterval(interval);
+      clearInterval(hbInterval);
+    };
   }, [currentUser?.id, version]);
 
   const handlePostUpdated = () => {

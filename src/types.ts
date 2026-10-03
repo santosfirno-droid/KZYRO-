@@ -10,6 +10,8 @@ export interface User {
   accentColor: string;
   joinedDate: string;
   supabaseUserId?: string;
+  isOnline?: boolean;
+  lastActiveAt?: number;
 }
 
 export interface Comment {

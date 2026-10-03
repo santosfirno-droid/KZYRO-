@@ -26,6 +26,7 @@ interface User {
   joinedDate: string;
   supabaseUserId?: string;
   passwordHash?: string;
+  lastActiveAt?: number;
 }
 
 interface Comment {
@@ -124,17 +125,41 @@ async function startServer() {
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
-  app.use(express.json({ limit: '15mb' }));
+  app.use(express.json({ limit: '25mb' }));
 
   // --- API: Health & Status ---
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', membersCount: db.users.length, postsCount: db.posts.length });
+    res.json({
+      status: 'ok',
+      membersCount: db.users.length,
+      postsCount: db.posts.length,
+      messagesCount: db.messages.length,
+    });
   });
 
-  // --- API: Users Directory & Search ---
+  // --- API: User Heartbeat (Presence Tracking) ---
+  app.post('/api/users/heartbeat', (req: Request, res: Response) => {
+    const { userId } = req.body;
+    if (userId) {
+      const user = db.users.find((u) => u.id === userId);
+      if (user) {
+        user.lastActiveAt = Date.now();
+        saveDB(db);
+      }
+    }
+    res.json({ ok: true });
+  });
+
+  // --- API: Users Directory & Search with Online Status ---
   app.get('/api/users', (req: Request, res: Response) => {
     const q = ((req.query.q as string) || '').trim().toLowerCase();
-    let result = db.users.map(({ passwordHash, ...rest }) => rest);
+    const now = Date.now();
+    const ONLINE_THRESHOLD = 60 * 1000; // 60 seconds
+
+    let result = db.users.map(({ passwordHash, ...rest }) => ({
+      ...rest,
+      isOnline: Boolean(rest.lastActiveAt && now - rest.lastActiveAt < ONLINE_THRESHOLD),
+    }));
 
     if (q) {
       result = result.filter(
@@ -154,7 +179,11 @@ async function startServer() {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
     const { passwordHash, ...safeUser } = user;
-    res.json(safeUser);
+    const now = Date.now();
+    res.json({
+      ...safeUser,
+      isOnline: Boolean(safeUser.lastActiveAt && now - safeUser.lastActiveAt < 60000),
+    });
   });
 
   // --- API: Register ---
@@ -167,13 +196,12 @@ async function startServer() {
 
     const cleanEmail = email.trim().toLowerCase();
 
-    // Check if user already exists locally
+    // Check if user already exists
     const existing = db.users.find((u) => u.email.toLowerCase() === cleanEmail);
     if (existing) {
       return res.status(400).json({ error: 'Este e-mail já está cadastrado. Faça login.' });
     }
 
-    // Attempt registration in Supabase Auth
     let supabaseId = '';
     try {
       const { data: supaAuth, error: supaErr } = await supabase.auth.signUp({
@@ -186,7 +214,6 @@ async function startServer() {
 
       if (supaAuth?.user) {
         supabaseId = supaAuth.user.id;
-        // update profiles row
         await supabase
           .from('profiles')
           .update({
@@ -196,7 +223,6 @@ async function startServer() {
           })
           .eq('id', supaAuth.user.id);
       } else if (supaErr && supaErr.message.toLowerCase().includes('already registered')) {
-        // try signing in
         const { data: signInData } = await supabase.auth.signInWithPassword({
           email: cleanEmail,
           password,
@@ -221,14 +247,15 @@ async function startServer() {
       accentColor: '#38bdf8',
       joinedDate: new Date().toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }),
       supabaseUserId: supabaseId || undefined,
-      passwordHash: password, // For internal validation
+      passwordHash: password,
+      lastActiveAt: Date.now(),
     };
 
     db.users.push(newUser);
     saveDB(db);
 
     const { passwordHash: _, ...safeUser } = newUser;
-    res.status(201).json(safeUser);
+    res.status(201).json({ ...safeUser, isOnline: true });
   });
 
   // --- API: Login ---
@@ -240,7 +267,7 @@ async function startServer() {
 
     const cleanEmail = email.trim().toLowerCase();
 
-    // Try Supabase auth
+    // Check Supabase Auth
     try {
       const { data: sAuth } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
@@ -262,15 +289,19 @@ async function startServer() {
             accentColor: '#38bdf8',
             joinedDate: 'Hoje',
             supabaseUserId: sAuth.user.id,
+            lastActiveAt: Date.now(),
           };
           db.users.push(found);
-          saveDB(db);
+        } else {
+          found.lastActiveAt = Date.now();
         }
+        saveDB(db);
+
         const { passwordHash: _, ...safeUser } = found;
-        return res.json(safeUser);
+        return res.json({ ...safeUser, isOnline: true });
       }
     } catch {
-      // fallback to local check
+      // fallback
     }
 
     const localUser = db.users.find((u) => u.email.toLowerCase() === cleanEmail);
@@ -278,55 +309,65 @@ async function startServer() {
       return res.status(401).json({ error: 'Credenciais inválidas. Verifique seu e-mail e senha.' });
     }
 
+    localUser.lastActiveAt = Date.now();
+    saveDB(db);
+
     const { passwordHash: _, ...safeUser } = localUser;
-    res.json(safeUser);
+    res.json({ ...safeUser, isOnline: true });
   });
 
   // --- API: Update Profile ---
   app.put('/api/users/:id', async (req: Request, res: Response) => {
     const { name, role, avatar, bio } = req.body;
-    const userIndex = db.users.findIndex((u) => u.id === req.params.id);
+    let user = db.users.find((u) => u.id === req.params.id);
 
-    if (userIndex === -1) {
+    if (!user) {
+      // If user id not found, look up by email if provided
+      const email = req.body.email;
+      if (email) {
+        user = db.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+      }
+    }
+
+    if (!user) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
-    const user = db.users[userIndex];
     if (name) user.name = name.trim();
     if (role) user.role = role.trim();
     if (avatar) user.avatar = avatar.trim();
     if (bio !== undefined) user.bio = bio.trim();
+    user.lastActiveAt = Date.now();
 
-    // Propagate changes to all author references
+    // Propagate updates to all posts and comments
     db.posts.forEach((p) => {
-      if (p.authorId === user.id) {
-        if (name) p.authorName = user.name;
-        if (role) p.authorRole = user.role;
-        if (avatar) p.authorAvatar = user.avatar;
+      if (p.authorId === user!.id) {
+        if (name) p.authorName = user!.name;
+        if (role) p.authorRole = user!.role;
+        if (avatar) p.authorAvatar = user!.avatar;
       }
       p.comments.forEach((c) => {
-        if (c.authorId === user.id) {
-          if (name) c.authorName = user.name;
-          if (role) c.authorRole = user.role;
-          if (avatar) c.authorAvatar = user.avatar;
+        if (c.authorId === user!.id) {
+          if (name) c.authorName = user!.name;
+          if (role) c.authorRole = user!.role;
+          if (avatar) c.authorAvatar = user!.avatar;
         }
       });
     });
 
     db.messages.forEach((m) => {
-      if (m.senderId === user.id) {
-        if (name) m.senderName = user.name;
-        if (avatar) m.senderAvatar = user.avatar;
+      if (m.senderId === user!.id) {
+        if (name) m.senderName = user!.name;
+        if (avatar) m.senderAvatar = user!.avatar;
       }
-      if (m.recipientId === user.id) {
-        if (name) m.recipientName = user.name;
-        if (avatar) m.recipientAvatar = user.avatar;
+      if (m.recipientId === user!.id) {
+        if (name) m.recipientName = user!.name;
+        if (avatar) m.recipientAvatar = user!.avatar;
       }
     });
 
     saveDB(db);
 
-    // Sync to Supabase
     if (user.supabaseUserId) {
       try {
         await supabase
@@ -343,27 +384,52 @@ async function startServer() {
     }
 
     const { passwordHash: _, ...safeUser } = user;
-    res.json(safeUser);
+    res.json({ ...safeUser, isOnline: true });
   });
 
   // --- API: Single Shared Feed ("Feed Único") ---
   app.get('/api/posts', (_req: Request, res: Response) => {
-    // Return all posts sorted by creation date descending
     const sorted = [...db.posts].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
     res.json(sorted);
   });
 
+  // RESILIENT POST CREATION: Never reject a post from an authenticated user!
   app.post('/api/posts', (req: Request, res: Response) => {
-    const { authorId, content, imageUrl } = req.body;
+    const { authorId, authorName, authorRole, authorAvatar, authorEmail, content, imageUrl } =
+      req.body;
+
     if (!content?.trim()) {
       return res.status(400).json({ error: 'Conteúdo da publicação é obrigatório.' });
     }
 
-    const author = db.users.find((u) => u.id === authorId);
+    // Try finding author in db.users
+    let author = db.users.find((u) => u.id === authorId);
+    if (!author && authorEmail) {
+      author = db.users.find((u) => u.email.toLowerCase() === authorEmail.toLowerCase());
+    }
+
+    // If author still not registered in db.users, auto-register them seamlessly!
     if (!author) {
-      return res.status(401).json({ error: 'Usuário autor não encontrado.' });
+      author = {
+        id: authorId || `user_${Date.now()}`,
+        name: authorName?.trim() || 'Membro KZYRO',
+        role: authorRole?.trim() || 'Equipe KZYRO',
+        email: authorEmail?.trim().toLowerCase() || `membro_${Date.now()}@kzyro.com`,
+        avatar:
+          authorAvatar ||
+          'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=240&auto=format&fit=crop&q=80',
+        bio: 'Membro da equipe KZYRO.',
+        accentColor: '#38bdf8',
+        joinedDate: 'Hoje',
+        lastActiveAt: Date.now(),
+      };
+      db.users.push(author);
+    } else {
+      author.lastActiveAt = Date.now();
+      if (authorName && author.name !== authorName.trim()) author.name = authorName.trim();
+      if (authorAvatar && author.avatar !== authorAvatar.trim()) author.avatar = authorAvatar.trim();
     }
 
     const newPost: Post = {
@@ -381,16 +447,16 @@ async function startServer() {
 
     db.posts.unshift(newPost);
 
-    // Create notifications for all other users
-    const otherUsers = db.users.filter((u) => u.id !== author.id);
+    // Notifications for all other members
+    const otherUsers = db.users.filter((u) => u.id !== author!.id);
     otherUsers.forEach((u) => {
       db.notifications.unshift({
         id: `notif_${Date.now()}_${u.id}`,
         recipientId: u.id,
-        senderId: author.id,
-        senderName: author.name,
-        senderAvatar: author.avatar,
-        senderRole: author.role,
+        senderId: author!.id,
+        senderName: author!.name,
+        senderAvatar: author!.avatar,
+        senderRole: author!.role,
         type: 'post',
         postId: newPost.id,
         snippet: newPost.content.slice(0, 50) + (newPost.content.length > 50 ? '...' : ''),
@@ -430,9 +496,9 @@ async function startServer() {
       return res.status(404).json({ error: 'Publicação não encontrada.' });
     }
 
-    const user = db.users.find((u) => u.id === userId);
-    if (!user) {
-      return res.status(401).json({ error: 'Usuário não autenticado.' });
+    let user = db.users.find((u) => u.id === userId);
+    if (user) {
+      user.lastActiveAt = Date.now();
     }
 
     const hasLiked = post.likes.includes(userId);
@@ -440,15 +506,14 @@ async function startServer() {
       post.likes = post.likes.filter((id) => id !== userId);
     } else {
       post.likes.push(userId);
-      // Notify post author if not self
       if (post.authorId !== userId) {
         db.notifications.unshift({
           id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           recipientId: post.authorId,
-          senderId: user.id,
-          senderName: user.name,
-          senderAvatar: user.avatar,
-          senderRole: user.role,
+          senderId: userId,
+          senderName: user ? user.name : 'Um membro',
+          senderAvatar: user ? user.avatar : '',
+          senderRole: user ? user.role : 'Equipe',
           type: 'like',
           postId: post.id,
           snippet: post.content.slice(0, 50) + (post.content.length > 50 ? '...' : ''),
@@ -464,7 +529,7 @@ async function startServer() {
 
   // --- API: Comments ---
   app.post('/api/posts/:id/comments', (req: Request, res: Response) => {
-    const { authorId, content } = req.body;
+    const { authorId, authorName, authorRole, authorAvatar, content } = req.body;
     if (!content?.trim()) {
       return res.status(400).json({ error: 'Conteúdo do comentário é obrigatório.' });
     }
@@ -474,32 +539,45 @@ async function startServer() {
       return res.status(404).json({ error: 'Publicação não encontrada.' });
     }
 
-    const author = db.users.find((u) => u.id === authorId);
-    if (!author) {
-      return res.status(401).json({ error: 'Usuário autor não encontrado.' });
+    let author = db.users.find((u) => u.id === authorId);
+    if (!author && authorName) {
+      author = {
+        id: authorId,
+        name: authorName,
+        role: authorRole || 'Equipe',
+        email: `${authorId}@kzyro.com`,
+        avatar: authorAvatar || '',
+        bio: '',
+        accentColor: '#38bdf8',
+        joinedDate: 'Hoje',
+        lastActiveAt: Date.now(),
+      };
+      db.users.push(author);
+    } else if (author) {
+      author.lastActiveAt = Date.now();
     }
 
     const newComment: Comment = {
       id: `comm_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       postId: post.id,
-      authorId: author.id,
-      authorName: author.name,
-      authorRole: author.role,
-      authorAvatar: author.avatar,
+      authorId,
+      authorName: author ? author.name : authorName || 'Membro',
+      authorRole: author ? author.role : authorRole || 'Equipe',
+      authorAvatar: author ? author.avatar : authorAvatar || '',
       content: content.trim(),
       createdAt: new Date().toISOString(),
     };
 
     post.comments.push(newComment);
 
-    if (post.authorId !== author.id) {
+    if (post.authorId !== authorId) {
       db.notifications.unshift({
         id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         recipientId: post.authorId,
-        senderId: author.id,
-        senderName: author.name,
-        senderAvatar: author.avatar,
-        senderRole: author.role,
+        senderId: authorId,
+        senderName: newComment.authorName,
+        senderAvatar: newComment.authorAvatar,
+        senderRole: newComment.authorRole,
         type: 'comment',
         postId: post.id,
         snippet: content.slice(0, 50) + (content.length > 50 ? '...' : ''),
@@ -535,7 +613,7 @@ async function startServer() {
     res.json({ success: true, deletedCommentId: req.params.commentId });
   });
 
-  // --- API: Private Direct Messages (Strict Separation) ---
+  // --- API: Private Direct Messages ---
   app.get('/api/messages', (req: Request, res: Response) => {
     const userId = req.query.userId as string;
     if (!userId) {
@@ -551,27 +629,25 @@ async function startServer() {
   });
 
   app.post('/api/messages', (req: Request, res: Response) => {
-    const { senderId, recipientId, content, imageUrl } = req.body;
+    const { senderId, recipientId, content, imageUrl, senderName, senderAvatar, recipientName, recipientAvatar } = req.body;
 
     if (!content?.trim() && !imageUrl) {
       return res.status(400).json({ error: 'Mensagem vazia.' });
     }
 
-    const sender = db.users.find((u) => u.id === senderId);
-    const recipient = db.users.find((u) => u.id === recipientId);
+    let sender = db.users.find((u) => u.id === senderId);
+    let recipient = db.users.find((u) => u.id === recipientId);
 
-    if (!sender || !recipient) {
-      return res.status(400).json({ error: 'Remetente ou destinatário não encontrado.' });
-    }
+    if (sender) sender.lastActiveAt = Date.now();
 
     const newMsg: DirectMessage = {
       id: `dm_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      senderId: sender.id,
-      recipientId: recipient.id,
-      senderName: sender.name,
-      senderAvatar: sender.avatar,
-      recipientName: recipient.name,
-      recipientAvatar: recipient.avatar,
+      senderId,
+      recipientId,
+      senderName: sender ? sender.name : senderName || 'Membro',
+      senderAvatar: sender ? sender.avatar : senderAvatar || '',
+      recipientName: recipient ? recipient.name : recipientName || 'Membro',
+      recipientAvatar: recipient ? recipient.avatar : recipientAvatar || '',
       content: content?.trim() || '',
       imageUrl: imageUrl?.trim() || undefined,
       createdAt: new Date().toISOString(),
@@ -582,12 +658,12 @@ async function startServer() {
 
     // Notify recipient
     db.notifications.unshift({
-      id: `notif_${Date.now()}_${recipient.id}`,
-      recipientId: recipient.id,
-      senderId: sender.id,
-      senderName: sender.name,
-      senderAvatar: sender.avatar,
-      senderRole: sender.role,
+      id: `notif_${Date.now()}_${recipientId}`,
+      recipientId,
+      senderId,
+      senderName: newMsg.senderName,
+      senderAvatar: newMsg.senderAvatar,
+      senderRole: sender ? sender.role : 'Equipe',
       type: 'direct_message',
       snippet: newMsg.content.slice(0, 50) + (newMsg.content.length > 50 ? '...' : ''),
       createdAt: new Date().toISOString(),

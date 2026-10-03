@@ -42,7 +42,14 @@ export function PostCard({
     if (!commentText.trim() || isSubmittingComment) return;
 
     setIsSubmittingComment(true);
-    await ApiService.addComment(post.id, currentUser.id, commentText);
+    await ApiService.addComment({
+      postId: post.id,
+      authorId: currentUser.id,
+      authorName: currentUser.name,
+      authorRole: currentUser.role,
+      authorAvatar: currentUser.avatar,
+      content: commentText,
+    });
     setCommentText('');
     setIsSubmittingComment(false);
     setShowComments(true);

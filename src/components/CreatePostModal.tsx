@@ -47,6 +47,7 @@ export function CreatePostModal({
   const [imageUrl, setImageUrl] = useState('');
   const [showImageOptions, setShowImageOptions] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
@@ -56,13 +57,30 @@ export function CreatePostModal({
     if (!content.trim() || isSubmitting) return;
 
     setIsSubmitting(true);
-    await ApiService.createPost(currentUser.id, content, imageUrl);
-    setContent('');
-    setImageUrl('');
-    setShowImageOptions(false);
-    setIsSubmitting(false);
-    onPostCreated();
-    onClose();
+    setSubmitError(null);
+
+    try {
+      await ApiService.createPost({
+        authorId: currentUser.id,
+        authorName: currentUser.name,
+        authorRole: currentUser.role,
+        authorAvatar: currentUser.avatar,
+        authorEmail: currentUser.email,
+        content: content.trim(),
+        imageUrl: imageUrl.trim() || undefined,
+      });
+
+      setContent('');
+      setImageUrl('');
+      setShowImageOptions(false);
+      setIsSubmitting(false);
+      onPostCreated();
+      onClose();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Falha ao publicar. Tente novamente.';
+      setSubmitError(msg);
+      setIsSubmitting(false);
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -115,6 +133,12 @@ export function CreatePostModal({
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-y-auto">
           <div className="p-5 space-y-4">
+            {submitError && (
+              <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs">
+                {submitError}
+              </div>
+            )}
+
             {/* Textarea */}
             <textarea
               autoFocus
