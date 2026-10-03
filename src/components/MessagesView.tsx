@@ -197,10 +197,10 @@ export function MessagesView({
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         {/* ALL REGISTERED ACCOUNTS LIST (Sidebar) */}
         <aside
-          className={`w-full sm:w-80 bg-[#080e1c] border-r border-slate-800/80 flex flex-col ${
+          className={`w-full sm:w-80 bg-[#080e1c] border-r border-slate-800/80 flex-col shrink-0 ${
             selectedPartnerId ? 'hidden sm:flex' : 'flex'
           }`}
         >
@@ -331,14 +331,14 @@ export function MessagesView({
 
         {/* ACTIVE CHAT AREA */}
         <section
-          className={`flex-1 flex flex-col bg-[#070b14] ${
-            !selectedPartnerId ? 'hidden sm:flex' : 'flex'
+          className={`flex-1 flex-col bg-[#070b14] min-w-0 ${
+            selectedPartnerId ? 'flex' : 'hidden sm:flex'
           }`}
         >
           {selectedPartner ? (
             <>
               {/* Chat Header with Real Online / Offline status */}
-              <div className="p-3 sm:px-5 border-b border-slate-800/80 bg-[#0b1222] flex items-center justify-between">
+              <div className="p-3 sm:px-5 border-b border-slate-800/80 bg-[#0b1222] relative z-10 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-3">
                   <button
                     type="button"

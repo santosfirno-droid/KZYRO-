@@ -252,7 +252,7 @@ export default function App() {
 
             {activeTab === 'messages' && (
               <MessagesView
-                key={`${currentUser.id}_${version}`}
+                key={currentUser.id}
                 currentUser={currentUser}
                 initialPartnerId={selectedChatPartnerId}
                 onViewMemberProfile={handleViewMemberProfile}
