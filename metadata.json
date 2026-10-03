@@ -1,0 +1,6 @@
+{
+  "name": "KZYRO Community",
+  "description": "Rede social privada e exclusiva para a equipe KZYRO compartilhar atualizações, interagir no feed e validar engajamento.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
